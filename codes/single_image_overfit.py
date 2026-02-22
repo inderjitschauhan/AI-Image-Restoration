@@ -13,7 +13,15 @@ import matplotlib.pyplot as plt
 # Random Image Selection
 # ---------------------------
 
-def get_random_image(data_dir="data"):
+import os
+
+current_folder = os.path.dirname(os.path.abspath(__file__))  # folder of current script
+TRAIN_DIR = os.path.join(current_folder, "..", "data", "train")
+TRAIN_DIR = os.path.abspath(TRAIN_DIR)  # normalize path
+print(TRAIN_DIR)
+
+
+def get_random_image(data_dir="../data"):
     data_path = Path(data_dir)
 
     if not data_path.exists():
