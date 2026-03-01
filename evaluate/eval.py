@@ -8,7 +8,7 @@ from math import log10
 import pandas as pd
 
 # ================= CONFIG =================
-TRAIN_DIR = r"data/train"
+TRAIN_DIR = r"data/set5"
 WEIGHTS_DIR = r"weights/dncnn"
 NOISE_STD = 50
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
