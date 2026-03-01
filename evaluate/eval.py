@@ -10,7 +10,7 @@ import pandas as pd
 # ================= CONFIG =================
 TRAIN_DIR = r"data/train"
 WEIGHTS_DIR = r"weights/dncnn"
-NOISE_STD = 25
+NOISE_STD = 50
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 np.random.seed(42)

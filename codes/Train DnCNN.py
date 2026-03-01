@@ -22,7 +22,7 @@ PATCH_SIZE = 64
 BATCH_SIZE = 16   # large batch; adjust to GPU memory
 EPOCHS = 50
 LR = 1e-3
-SIGMA = 25
+SIGMA = 50
 PATCHES_PER_IMAGE = 2
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
