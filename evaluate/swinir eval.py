@@ -239,8 +239,6 @@ plt.tight_layout()
 plt.show()
 
 
-
-
 import os
 import cv2
 import torch
@@ -258,10 +256,10 @@ DEVICE = torch.device("cpu")
 
 results = []
 
-# Get all LR4 images
+# Get LR4 images
 image_list = [f for f in os.listdir(DATA_DIR) if "_LR4" in f]
 
-# Pick random 10
+# Random 10 images
 random_images = random.sample(image_list, min(10, len(image_list)))
 
 print("Selected Images:")
@@ -276,7 +274,7 @@ for img_name in random_images:
     hr_path = lr_path.replace("_LR4", "_HR")
 
     if not os.path.exists(hr_path):
-        print("HR not found for:", img_name)
+        print("HR not found:", img_name)
         continue
 
     # ===============================
@@ -289,19 +287,10 @@ for img_name in random_images:
     lr_tensor = torch.from_numpy(lr).permute(2,0,1).unsqueeze(0).to(DEVICE)
 
     # ===============================
-    # DENOISING
+    # SWINIR (DIRECT)
     # ===============================
     with torch.no_grad():
-        noise_pred = dncnn(lr_tensor)
-        denoised_tensor = lr_tensor - noise_pred
-
-    denoised_tensor = denoised_tensor.clamp(0,1)
-
-    # ===============================
-    # SUPER RESOLUTION
-    # ===============================
-    with torch.no_grad():
-        sr_tensor = swinir(denoised_tensor)
+        sr_tensor = swinir(lr_tensor)
 
     sr_tensor = sr_tensor.clamp(0,1)
     sr = sr_tensor.squeeze(0).permute(1,2,0).cpu().numpy()
@@ -314,94 +303,35 @@ for img_name in random_images:
     hr = hr.astype(np.float32) / 255.0
 
     # ===============================
-    # BICUBIC
+    # BICUBIC (LR → HR)
     # ===============================
     h_lr, w_lr, _ = lr.shape
-    bicubic = cv2.resize(lr, (w_lr*SCALE, h_lr*SCALE),
-                         interpolation=cv2.INTER_CUBIC)
-
-results = []
-
-for img_name in random_images:
-
-    lr_path = os.path.join(DATA_DIR, img_name)
-    hr_path = lr_path.replace("_LR4", "_HR")
-
-    if not os.path.exists(hr_path):
-        continue
+    bicubic = cv2.resize(
+        lr,
+        (w_lr*SCALE, h_lr*SCALE),
+        interpolation=cv2.INTER_CUBIC
+    )
 
     # ===============================
-    # LOAD LR
+    # METRICS
     # ===============================
-    lr = cv2.imread(lr_path)
-    lr = cv2.cvtColor(lr, cv2.COLOR_BGR2RGB)
-    lr = lr.astype(np.float32) / 255.0
-
-    lr_tensor = torch.from_numpy(lr).permute(2,0,1).unsqueeze(0).to(DEVICE)
-
-    # ===============================
-    # DnCNN
-    # ===============================
-    with torch.no_grad():
-        noise_pred = dncnn(lr_tensor)
-        denoised_tensor = lr_tensor - noise_pred
-
-    denoised_tensor = denoised_tensor.clamp(0,1)
-    denoised = denoised_tensor.squeeze(0).permute(1,2,0).cpu().numpy()
-
-    # ===============================
-    # SwinIR
-    # ===============================
-    with torch.no_grad():
-        sr_tensor = swinir(denoised_tensor)
-
-    sr_tensor = sr_tensor.clamp(0,1)
-    sr = sr_tensor.squeeze(0).permute(1,2,0).cpu().numpy()
-
-    # ===============================
-    # LOAD HR
-    # ===============================
-    hr = cv2.imread(hr_path)
-    hr = cv2.cvtColor(hr, cv2.COLOR_BGR2RGB)
-    hr = hr.astype(np.float32) / 255.0
-
-    h_lr, w_lr, _ = lr.shape
-
-    # ===============================
-    # Bicubic (LR → HR)
-    # ===============================
-    bicubic = cv2.resize(lr, (w_lr*SCALE, h_lr*SCALE),
-                         interpolation=cv2.INTER_CUBIC)
-
-    # ===============================
-    # DnCNN Upscaled (for fair comparison)
-    # ===============================
-    dncnn_up = cv2.resize(denoised, (w_lr*SCALE, h_lr*SCALE),
-                          interpolation=cv2.INTER_CUBIC)
-
-    # ===============================
-    # Metrics
-    # ===============================
-
     psnr_bic = peak_signal_noise_ratio(hr, bicubic, data_range=1.0)
-    ssim_bic = structural_similarity(hr, bicubic,
-                                     channel_axis=2,
-                                     data_range=1.0)
-
-    psnr_dncnn = peak_signal_noise_ratio(hr, dncnn_up, data_range=1.0)
-    ssim_dncnn = structural_similarity(hr, dncnn_up,
-                                       channel_axis=2,
-                                       data_range=1.0)
+    ssim_bic = structural_similarity(
+        hr, bicubic,
+        channel_axis=2,
+        data_range=1.0
+    )
 
     psnr_sr = peak_signal_noise_ratio(hr, sr, data_range=1.0)
-    ssim_sr = structural_similarity(hr, sr,
-                                    channel_axis=2,
-                                    data_range=1.0)
+    ssim_sr = structural_similarity(
+        hr, sr,
+        channel_axis=2,
+        data_range=1.0
+    )
 
     results.append([
         img_name,
         psnr_bic, ssim_bic,
-        psnr_dncnn, ssim_dncnn,
         psnr_sr, ssim_sr
     ])
 
@@ -413,23 +343,8 @@ for img_name in random_images:
 columns = [
     "Image",
     "PSNR_Bicubic", "SSIM_Bicubic",
-    "PSNR_DnCNN", "SSIM_DnCNN",
-    "PSNR_DnCNN_SwinIR", "SSIM_DnCNN_SwinIR"
+    "PSNR_SwinIR", "SSIM_SwinIR"
 ]
-
-df = pd.DataFrame(results, columns=columns)
-
-# Add average row safely
-avg_values = df.iloc[:,1:].mean()
-df.loc[len(df)] = ["Average"] + list(avg_values)
-
-print("\n==============================")
-print(df)
-print("==============================")
-
-# Optional save
-df.to_csv("RealSR_random10_results.csv", index=False)
-print("\nSaved as RealSR_random10_results.csv")
 
 df = pd.DataFrame(results, columns=columns)
 
@@ -441,6 +356,5 @@ print("\n==============================")
 print(df)
 print("==============================")
 
-# Optional save
-df.to_csv("RealSR_random10_results.csv", index=False)
-print("\nSaved as RealSR_random10_results.csv")
+df.to_csv("RealSR_SwinIR_only_random10.csv", index=False)
+print("\nSaved as RealSR_SwinIR_only_random10.csv")
