@@ -16,7 +16,7 @@ DATA_DIRS = [
     os.path.abspath(r"./data/RealSR(V3)/Nikon/Train/4")
 ]
 
-SAVE_DIR = os.path.abspath(r"./weights/dncnn_real_noise")
+SAVE_DIR = os.path.abspath(r"./weights/dncnn")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 PATCH_SIZE = 128
@@ -89,12 +89,12 @@ class RealNoiseDataset(Dataset):
 
         # ---------------- REALISTIC NOISE ----------------
         # Shot noise (Poisson, signal dependent)
-        shot_noise = torch.poisson(img * 255.0) / 255.0 - img
+        shot_noise = torch.poisson(img * 255.0) / 255.0 - img23456798 
 
         # Read noise (Gaussian)
         read_noise = torch.randn_like(img) * (SIGMA / 255.0)
 
-        noisy = img + shot_noise + read_noise
+        noisy = img + shot_noise + read_noise 
         noisy = torch.clamp(noisy, 0.0, 1.0)
 
         return noisy, hr
@@ -204,11 +204,11 @@ if __name__ == "__main__":
         plt.pause(0.1)
 
         # -------- SAVE --------
-        torch.save(model.state_dict(), os.path.join(SAVE_DIR, "dncnn_real_last.pth"))
+        torch.save(model.state_dict(), os.path.join(SAVE_DIR, "dncnn_real_last_lrsr.pth"))
 
         if val_psnr_val > best_psnr:
             best_psnr = val_psnr_val
-            torch.save(model.state_dict(), os.path.join(SAVE_DIR, "dncnn_real_best.pth"))
+            torch.save(model.state_dict(), os.path.join(SAVE_DIR, "dncnn_real__lrsr.pth"))
             print(f"Best model saved. PSNR = {val_psnr_val:.2f} dB")
 
     plt.ioff()
