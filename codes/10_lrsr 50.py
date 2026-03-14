@@ -24,7 +24,7 @@ BATCH_SIZE = 8
 EPOCHS = 200
 LR = 1e-4
 PATCHES_PER_IMAGE = 4
-SIGMA = 15   # Read noise level
+SIGMA = 50   # Read noise level
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 best_psnr = 0
@@ -89,7 +89,7 @@ class RealNoiseDataset(Dataset):
 
         # ---------------- REALISTIC NOISE ----------------
         # Shot noise (Poisson, signal dependent)
-        shot_noise = torch.poisson(img * 255.0) / 255.0 - img23456798 
+        shot_noise = torch.poisson(img * 255.0) / 255.0 - img
 
         # Read noise (Gaussian)
         read_noise = torch.randn_like(img) * (SIGMA / 255.0)
@@ -204,11 +204,11 @@ if __name__ == "__main__":
         plt.pause(0.1)
 
         # -------- SAVE --------
-        torch.save(model.state_dict(), os.path.join(SAVE_DIR, "dncnn_real_last_lrsr.pth"))
+        torch.save(model.state_dict(), os.path.join(SAVE_DIR, "dncnn_real_last_lrsr_50.pth"))
 
         if val_psnr_val > best_psnr:
             best_psnr = val_psnr_val
-            torch.save(model.state_dict(), os.path.join(SAVE_DIR, "dncnn_real__lrsr.pth"))
+            torch.save(model.state_dict(), os.path.join(SAVE_DIR, "dncnn_real_best_lrsr_50.pth"))
             print(f"Best model saved. PSNR = {val_psnr_val:.2f} dB")
 
     plt.ioff()

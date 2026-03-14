@@ -14,7 +14,7 @@ from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 # CONFIG
 # ===============================
 SET5_DIR = "data/set5"
-DNCNN_PATH = "weights/dncnn/dncnn_trained_best50.pth"
+DNCNN_PATH = "weights/dncnn/dncnn_real_noise_best.pth"
 SR_PATH = "weights/SR/best_mini_swinir.pth"
 
 NOISE_STD = 25

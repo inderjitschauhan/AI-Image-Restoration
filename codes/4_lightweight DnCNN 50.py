@@ -20,7 +20,7 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 
 PATCH_SIZE = 64
 BATCH_SIZE = 16   # large batch; adjust to GPU memory
-EPOCHS = 50
+EPOCHS = 1
 LR = 1e-3
 SIGMA = 50
 PATCHES_PER_IMAGE = 2
@@ -209,12 +209,12 @@ if __name__ == "__main__":
         val_psnr_hist.append(val_psnr)
 
         torch.save(model.state_dict(),
-                   os.path.join(SAVE_DIR, "dncnn_trained_last.pth"))
+                   os.path.join(SAVE_DIR, "lw_g_dncnn_trained_last_50.pth"))
 
         if val_psnr > best_psnr:
             best_psnr = val_psnr
             torch.save(model.state_dict(),
-                       os.path.join(SAVE_DIR, "dncnn_trained_best.pth"))
+                       os.path.join(SAVE_DIR, "lw_g_dncnn_trained_best_50.pth"))
             print("Best model saved.")
 
         plt.figure(fig1.number)

@@ -18,7 +18,7 @@ PATCH_SIZE = 64
 BATCH_SIZE = 16
 EPOCHS = 50
 LR = 1e-3
-SIGMA = 25              # read noise strength
+SIGMA = 50              # read noise strength
 PATCHES_PER_IMAGE = 2
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -188,14 +188,14 @@ if __name__ == "__main__":
 
         # Save last
         torch.save(model.state_dict(),
-                   os.path.join(SAVE_DIR, "dncnn_last.pth"))
+                   os.path.join(SAVE_DIR, "dncnn_real_50_last.pth"))
 
         # Save best
    
         if val_psnr > best_psnr:
             best_psnr = val_psnr
             torch.save(model.state_dict(),
-                       os.path.join(SAVE_DIR, "dncnn_best.pth"))
+                       os.path.join(SAVE_DIR, "dncnn_real_50_best.pth"))
             print("Best model saved.")
 
         # -------- LIVE PLOTS --------
