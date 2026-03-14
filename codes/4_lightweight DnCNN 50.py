@@ -209,12 +209,12 @@ if __name__ == "__main__":
         val_psnr_hist.append(val_psnr)
 
         torch.save(model.state_dict(),
-                   os.path.join(SAVE_DIR, "lw_g_dncnn_trained_last_50.pth"))
+                   os.path.join(SAVE_DIR, "Dncnn_8_Gaussian_Last_50.pth"))
 
         if val_psnr > best_psnr:
             best_psnr = val_psnr
             torch.save(model.state_dict(),
-                       os.path.join(SAVE_DIR, "lw_g_dncnn_trained_best_50.pth"))
+                       os.path.join(SAVE_DIR, "Dncnn_8_Gaussian_Best_25.pth"))
             print("Best model saved.")
 
         plt.figure(fig1.number)

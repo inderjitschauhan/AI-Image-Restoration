@@ -78,7 +78,7 @@ class DenoiseDataset(Dataset):
 
 # ================= MODEL =================
 class DnCNN(nn.Module):
-    def __init__(self, depth=17, channels=64):
+    def __init__(self, depth=8, channels=32):
         super().__init__()
         
         layers = [
@@ -188,14 +188,14 @@ if __name__ == "__main__":
 
         # Save last
         torch.save(model.state_dict(),
-                   os.path.join(SAVE_DIR, "dncnn_real_25_last.pth"))
+                   os.path.join(SAVE_DIR, "Dncnn_8_Real_Last_25.pth"))
 
         # Save best
    
         if val_psnr > best_psnr:
             best_psnr = val_psnr
             torch.save(model.state_dict(),
-                       os.path.join(SAVE_DIR, "dncnn_real_25_best.pth"))
+                       os.path.join(SAVE_DIR, "Dncnn_8_Real_Best_25.pth"))
             print("Best model saved.")
 
         # -------- LIVE PLOTS --------

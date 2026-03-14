@@ -204,11 +204,11 @@ if __name__ == "__main__":
         plt.pause(0.1)
 
         # -------- SAVE --------
-        torch.save(model.state_dict(), os.path.join(SAVE_DIR, "dncnn_real_last_lrsr.pth"))
+        torch.save(model.state_dict(), os.path.join(SAVE_DIR, "Dncnn_lrsr_17_Real_Last_25.pth"))
 
         if val_psnr_val > best_psnr:
             best_psnr = val_psnr_val
-            torch.save(model.state_dict(), os.path.join(SAVE_DIR, "dncnn_real_best_lrsr.pth"))
+            torch.save(model.state_dict(), os.path.join(SAVE_DIR, "Dncnn_lrsr_17_Real_Best_25.pth"))
             print(f"Best model saved. PSNR = {val_psnr_val:.2f} dB")
 
     plt.ioff()

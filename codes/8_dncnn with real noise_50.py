@@ -188,14 +188,14 @@ if __name__ == "__main__":
 
         # Save last
         torch.save(model.state_dict(),
-                   os.path.join(SAVE_DIR, "dncnn_real_50_last.pth"))
+                   os.path.join(SAVE_DIR, "Dncnn_17_Real_Last_50.pth"))
 
         # Save best
    
         if val_psnr > best_psnr:
             best_psnr = val_psnr
             torch.save(model.state_dict(),
-                       os.path.join(SAVE_DIR, "dncnn_real_50_best.pth"))
+                       os.path.join(SAVE_DIR, "Dncnn_17_Real_Best_50.pth"))
             print("Best model saved.")
 
         # -------- LIVE PLOTS --------
