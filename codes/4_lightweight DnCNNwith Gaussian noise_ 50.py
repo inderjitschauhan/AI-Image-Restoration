@@ -20,7 +20,7 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 
 PATCH_SIZE = 64
 BATCH_SIZE = 16   # large batch; adjust to GPU memory
-EPOCHS = 1
+EPOCHS = 50
 LR = 1e-3
 SIGMA = 50
 PATCHES_PER_IMAGE = 2

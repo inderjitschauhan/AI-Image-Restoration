@@ -25,7 +25,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 best_psnr = 0
 
 # ================= PSNR =================
-def psnr(x, y):
+# def psnr(x, y):
     mse = torch.mean((x - y) ** 2)
     mse = torch.clamp(mse, min=1e-10)
     return 10 * torch.log10(1.0 / mse)
