@@ -25,8 +25,8 @@ import matplotlib.pyplot as plt
 SCALE = 4
 PATCH_SIZE = 96
 BATCH_SIZE = 4
-EPOCHS = 300
-LR_RATE = 2e-4
+EPOCHS = 50
+LR_RATE = 1e-4
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 import os
@@ -57,8 +57,18 @@ TRAIN_DIRS = []
 VAL_DIRS = []
 
 for cam in CAMERAS:
-    TRAIN_DIRS += get_subfolders(BASE_TRAIN_DIR, cam, split="Train")
-    VAL_DIRS += get_subfolders(BASE_VAL_DIR, cam, split="Test")
+    train_path = os.path.join(BASE_TRAIN_DIR, cam, "Train", "4")
+    val_path = os.path.join(BASE_VAL_DIR, cam, "Test", "4")
+
+    if os.path.exists(train_path):
+        TRAIN_DIRS.append(train_path)
+    else:
+        print(f"Train folder missing: {train_path}")
+
+    if os.path.exists(val_path):
+        VAL_DIRS.append(val_path)
+    else:
+        print(f"Val folder missing: {val_path}")
 
 # -------------------- Print to verify --------------------
 print("Train folders found:")
@@ -347,7 +357,7 @@ for epoch in range(EPOCHS):
 
     if val_psnr > best_psnr:
         best_psnr = val_psnr
-        torch.save(model.state_dict(), "best_mini_swinir.pth")
+        torch.save(model.state_dict(), "best_swinir_sr.pth")
         print("Best model saved!")
 
     axs[0,0].clear(); axs[0,0].plot(train_loss_list); axs[0,0].set_title("Train Loss")
