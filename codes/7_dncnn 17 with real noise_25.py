@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
 import matplotlib.pyplot as plt
 
@@ -17,18 +18,34 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 PATCH_SIZE = 64
 BATCH_SIZE = 16
 EPOCHS = 50
-LR = 1e-3
-SIGMA = 25              # read noise strength
-PATCHES_PER_IMAGE = 2
+LR = 1e-4
+
+SIGMA = 25   # change to 25 or 50
+
+PATCHES_PER_IMAGE = 16
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 best_psnr = 0
 
-# ================= PSNR =================
+# ================= METRICS =================
 def psnr(x, y):
     mse = torch.mean((x - y) ** 2)
     mse = torch.clamp(mse, min=1e-10)
     return 10 * torch.log10(1.0 / mse)
+
+def ssim(img1, img2):
+    C1 = 0.01 ** 2
+    C2 = 0.03 ** 2
+
+    mu1 = F.avg_pool2d(img1, 3, 1, 1)
+    mu2 = F.avg_pool2d(img2, 3, 1, 1)
+
+    sigma1 = F.avg_pool2d(img1 * img1, 3, 1, 1) - mu1 ** 2
+    sigma2 = F.avg_pool2d(img2 * img2, 3, 1, 1) - mu2 ** 2
+    sigma12 = F.avg_pool2d(img1 * img2, 3, 1, 1) - mu1 * mu2
+
+    return (((2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)) /
+           ((mu1**2 + mu2**2 + C1) * (sigma1 + sigma2 + C2))).mean()
 
 # ================= DATASET =================
 class DenoiseDataset(Dataset):
@@ -56,7 +73,8 @@ class DenoiseDataset(Dataset):
 
         if H < ps or W < ps:
             img = cv2.resize(img, (ps, ps))
-            H, W, _ = img.shape
+
+        H, W, _ = img.shape
 
         y = np.random.randint(0, H - ps + 1)
         x = np.random.randint(0, W - ps + 1)
@@ -64,11 +82,8 @@ class DenoiseDataset(Dataset):
         clean = img[y:y+ps, x:x+ps]
         clean = torch.from_numpy(clean).permute(2, 0, 1).float()
 
-        # ================= REALISTIC NOISE =================
-        # Shot noise (Poisson, signal dependent)
+        # Real noise
         shot_noise = torch.poisson(clean * 255.0) / 255.0 - clean
-
-        # Read noise (Gaussian)
         read_noise = torch.randn_like(clean) * (SIGMA / 255.0)
 
         noisy = clean + shot_noise + read_noise
@@ -80,7 +95,7 @@ class DenoiseDataset(Dataset):
 class DnCNN(nn.Module):
     def __init__(self, depth=17, channels=64):
         super().__init__()
-        
+
         layers = [
             nn.Conv2d(3, channels, 3, 1, 1),
             nn.ReLU(inplace=True)
@@ -107,37 +122,33 @@ if __name__ == "__main__":
     val_size = len(dataset) - train_size
     train_set, val_set = random_split(dataset, [train_size, val_size])
 
-    train_loader = DataLoader(train_set,
-                              batch_size=BATCH_SIZE,
-                              shuffle=True,
-                              num_workers=4,
-                              pin_memory=True)
+    train_loader = DataLoader(train_set, batch_size=BATCH_SIZE,
+                              shuffle=True, num_workers=4, pin_memory=True)
 
-    val_loader = DataLoader(val_set,
-                            batch_size=BATCH_SIZE,
-                            shuffle=False,
-                            num_workers=4,
-                            pin_memory=True)
+    val_loader = DataLoader(val_set, batch_size=BATCH_SIZE,
+                            shuffle=False, num_workers=4, pin_memory=True)
 
-    model = DnCNN(depth=8, channels=32).to(DEVICE)
+    model = DnCNN(depth=17, channels=64).to(DEVICE)
+
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=LR)
 
+    # Plot setup
     plt.ion()
-    fig1 = plt.figure(figsize=(7,5))
-    fig2 = plt.figure(figsize=(7,5))
+    fig1 = plt.figure(figsize=(6,4))
+    fig2 = plt.figure(figsize=(6,4))
 
     train_loss_hist = []
-    val_loss_hist = []
     val_psnr_hist = []
+    val_ssim_hist = []
 
     print("Starting Training")
     print("Device:", DEVICE)
-    print("Images:", len(dataset))
+    print("Sigma:", SIGMA)
 
     for epoch in range(1, EPOCHS + 1):
 
-        # -------- TRAIN --------
+        # TRAIN
         model.train()
         train_loss = 0
 
@@ -156,10 +167,10 @@ if __name__ == "__main__":
 
         train_loss /= len(train_loader)
 
-        # -------- VALIDATION --------
+        # VALIDATION
         model.eval()
-        val_loss = 0
         val_psnr = 0
+        val_ssim = 0
 
         with torch.no_grad():
             for noisy, clean in val_loader:
@@ -167,59 +178,53 @@ if __name__ == "__main__":
                 clean = clean.to(DEVICE)
 
                 pred_noise = model(noisy)
-                loss = criterion(pred_noise, noisy - clean)
-
-                val_loss += loss.item()
-
                 denoised = torch.clamp(noisy - pred_noise, 0, 1)
+
                 val_psnr += psnr(denoised, clean).item()
+                val_ssim += ssim(denoised, clean).item()
 
-        val_loss /= len(val_loader)
         val_psnr /= len(val_loader)
+        val_ssim /= len(val_loader)
 
-        print(f"Epoch {epoch:02d} | "
-              f"Train Loss: {train_loss:.3e} | "
-              f"Val Loss: {val_loss:.3e} | "
-              f"Val PSNR: {val_psnr:.2f} dB")
+        print(f"Epoch {epoch:02d} | Loss: {train_loss:.3e} | PSNR: {val_psnr:.2f} | SSIM: {val_ssim:.4f}")
 
         train_loss_hist.append(train_loss)
-        val_loss_hist.append(val_loss)
         val_psnr_hist.append(val_psnr)
+        val_ssim_hist.append(val_ssim)
 
-        # Save last
+        # SAVE
         torch.save(model.state_dict(),
-                   os.path.join(SAVE_DIR, "Dncnn_17_Real_Last_25.pth"))
+                   os.path.join(SAVE_DIR, f"Dncnn_17_Real_Last_{SIGMA}.pth"))
 
-        # Save best
-   
+      
         if val_psnr > best_psnr:
             best_psnr = val_psnr
             torch.save(model.state_dict(),
-                       os.path.join(SAVE_DIR, "Dncnn_17_Real_Best_25.pth"))
+                       os.path.join(SAVE_DIR, f"Dncnn_17_Real_Best_{SIGMA}.pth"))
             print("Best model saved.")
 
-        # -------- LIVE PLOTS --------
+        # LIVE PLOTS
         plt.figure(fig1.number)
         plt.clf()
         plt.plot(train_loss_hist, label="Train Loss")
-        plt.plot(val_loss_hist, label="Val Loss")
         plt.xlabel("Epoch")
         plt.title("Loss Curve")
         plt.legend()
-        plt.grid(True)
+        plt.grid()
 
         plt.figure(fig2.number)
         plt.clf()
-        plt.plot(val_psnr_hist, label="Val PSNR")
+        plt.plot(val_psnr_hist, label="PSNR")
+        plt.plot(val_ssim_hist, label="SSIM")
         plt.xlabel("Epoch")
-        plt.title("PSNR Curve")
+        plt.title("Validation Metrics")
         plt.legend()
-        plt.grid(True)
+        plt.grid()
 
         plt.pause(0.001)
 
     plt.ioff()
     plt.show()
 
-    print("\nTraining Finished.")
-    print("Best PSNR Achieved:", best_psnr)
+    print("Training Finished")
+    print("Best PSNR:", best_psnr)

@@ -18,30 +18,6 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MODEL_PATH = "weights/SR/best_swinir_sr.pth"
 
 # ===============================
-# METRICS
-# ===============================
-def calculate_psnr(sr, hr):
-    mse = F.mse_loss(sr, hr)
-    if mse == 0:
-        return torch.tensor(100.0)
-    return 20 * torch.log10(1.0 / torch.sqrt(mse))
-
-def calculate_ssim(img1, img2):
-    C1 = 0.01 ** 2
-    C2 = 0.03 ** 2
-
-    mu1 = F.avg_pool2d(img1, 3, 1, 1)
-    mu2 = F.avg_pool2d(img2, 3, 1, 1)
-
-    sigma1 = F.avg_pool2d(img1 * img1, 3, 1, 1) - mu1 ** 2
-    sigma2 = F.avg_pool2d(img2 * img2, 3, 1, 1) - mu2 ** 2
-    sigma12 = F.avg_pool2d(img1 * img2, 3, 1, 1) - mu1 * mu2
-
-    ssim_map = ((2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)) / \
-               ((mu1 ** 2 + mu2 ** 2 + C1) * (sigma1 + sigma2 + C2))
-    return ssim_map.mean()
-
-# ===============================
 # WINDOW FUNCTIONS
 # ===============================
 def window_partition(x, ws):
@@ -57,7 +33,7 @@ def window_reverse(windows, ws, H, W):
     return x.view(B, -1, H, W)
 
 # ===============================
-# SWIN BLOCK
+# SWIN BLOCK (FIXED)
 # ===============================
 class SwinBlock(nn.Module):
     def __init__(self, dim, window_size=8, shift=False):
@@ -75,9 +51,10 @@ class SwinBlock(nn.Module):
 
     def forward(self, x):
         B, C, H, W = x.shape
+
+        # ✅ FIX: prevent zero division
         ws = min(self.ws, H, W)
-        if ws < 1:
-            ws = 1
+        ws = max(ws, 1)
 
         pad_h = (ws - H % ws) % ws
         pad_w = (ws - W % ws) % ws
@@ -103,7 +80,7 @@ class SwinBlock(nn.Module):
         return x[:, :, :H, :W]
 
 # ===============================
-# MINI SWINIR MODEL
+# MODEL
 # ===============================
 class MiniSwinIR(nn.Module):
     def __init__(self, dim=96):
@@ -140,76 +117,64 @@ model = MiniSwinIR().to(DEVICE)
 model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
 model.eval()
 
-total_params = sum(p.numel() for p in model.parameters())
 print("\nModel Loaded Successfully")
-print(f"Total Parameters: {total_params/1e6:.2f} Million")
 
 # ===============================
-# SELECT HR IMAGE
+# LOAD IMAGE
 # ===============================
 Tk().withdraw()
 hr_path = askopenfilename(title="Select HR Image")
-if hr_path == "":
-    print("No image selected.")
-    exit()
-
 hr_image = Image.open(hr_path).convert("RGB")
-w, h = hr_image.size
 
-# ✅ PRINT HR RESOLUTION
+w, h = hr_image.size
+lr_image = hr_image.resize((w // SCALE, h // SCALE), Image.BICUBIC)
+
 print("\n===== INPUT RESOLUTIONS =====")
 print(f"HR Resolution : {w} x {h}")
-
-# ===============================
-# CREATE LR IMAGE
-# ===============================
-lr_image = hr_image.resize((w//SCALE, h//SCALE), Image.BICUBIC)
-lw, lh = lr_image.size
-
-# ✅ PRINT LR RESOLUTION
-print(f"LR Resolution : {lw} x {lh}")
+print(f"LR Resolution : {lr_image.size[0]} x {lr_image.size[1]}")
 
 transform = transforms.ToTensor()
 lr_tensor = transform(lr_image).unsqueeze(0).to(DEVICE)
 
 # ===============================
-# INFERENCE (2x SR passes)
+# 🔥 2-STAGE SR (SAFE)
 # ===============================
 start = time.time()
 
 with torch.no_grad():
     # First SR
     sr_tensor = model(lr_tensor)
-    
-    # Second SR (feed output again)
+
+    # Downscale safely
+    sr_tensor = F.interpolate(
+        sr_tensor,
+        scale_factor=0.5,
+        mode='bicubic',
+        align_corners=False
+    )
+
+    # Second SR
     sr_tensor = model(sr_tensor)
 
 end = time.time()
 
 sr_tensor = torch.clamp(sr_tensor, 0, 1)
 
-
 # ===============================
-# METRICS
+# CONVERT + FILTER
 # ===============================
-hr_tensor = transform(hr_image).unsqueeze(0).to(DEVICE)
+sr_np = sr_tensor.squeeze(0).cpu().numpy().transpose(1, 2, 0)
+sr_np = (sr_np * 255).clip(0, 255).astype(np.uint8)
 
-sr_tensor_filtered = torch.from_numpy(sr_np.transpose(2, 0, 1)).float() / 255.0
-sr_tensor_filtered = sr_tensor_filtered.unsqueeze(0).to(DEVICE)
+sr_np = cv2.bilateralFilter(sr_np, 5, 50, 50)
 
-sr_resized = F.interpolate(sr_tensor_filtered, size=hr_tensor.shape[-2:], mode='bilinear')
+sr_image = Image.fromarray(sr_np)
 
-psnr = calculate_psnr(sr_resized, hr_tensor)
-ssim = calculate_ssim(sr_resized, hr_tensor)
-
-# ✅ PRINT SR RESOLUTION
 sw, sh = sr_image.size
 
 print("\n===== OUTPUT =====")
 print(f"SR Resolution : {sw} x {sh}")
 print(f"Inference Time : {(end-start)*1000:.2f} ms")
-print(f"PSNR : {psnr.item():.2f} dB")
-print(f"SSIM : {ssim.item():.4f}")
 
 # ===============================
 # PATCHES
@@ -220,57 +185,47 @@ def extract_patch(img, patch_size=64):
     return img.crop((cx - patch_size//2, cy - patch_size//2,
                      cx + patch_size//2, cy + patch_size//2))
 
+scale_factor = sw // lr_image.size[0]
+
 lr_patch = extract_patch(lr_image, 64)
-sr_patch = extract_patch(sr_image, 64 * SCALE)
+sr_patch = extract_patch(sr_image, 64 * scale_factor)
 lr_patch_up = lr_patch.resize(sr_patch.size, Image.BICUBIC)
-hr_patch = extract_patch(hr_image, 64 * SCALE)
-# ===============================
-# DISPLAY (ONLY RESOLUTION)
-# ===============================
+hr_patch = extract_patch(hr_image, 64 * scale_factor)
 
-lr_res_text = f"{lw} x {lh}"
-sr_res_text = f"{sw} x {sh}"
-hr_res_text = f"{w} x {h}"
-
-# ✅ Fixed top-left placement (same for all)
+# ===============================
+# DISPLAY
+# ===============================
 def put_res(ax, text):
-    ax.text(
-        0.01, 0.99, text,
-        transform=ax.transAxes,
-        fontsize=11,
-        color='white',
-        verticalalignment='top',
-        horizontalalignment='left',
-        bbox=dict(facecolor='black', alpha=0.7, pad=3)
-    )
+    ax.text(0.01, 0.99, text,
+            transform=ax.transAxes,
+            fontsize=11,
+            color='white',
+            verticalalignment='top',
+            bbox=dict(facecolor='black', alpha=0.7, pad=3))
 
 plt.figure(figsize=(15, 9))
 
-# LR Image
 ax1 = plt.subplot(2,3,1)
 ax1.imshow(lr_image)
-ax1.set_title("LR Input")
+ax1.set_title("LR")
 ax1.axis("off")
-put_res(ax1, lr_res_text)
+put_res(ax1, f"{lr_image.size[0]} x {lr_image.size[1]}")
 
-# SR Image
 ax2 = plt.subplot(2,3,2)
 ax2.imshow(sr_image)
-ax2.set_title("SR Output")
+ax2.set_title("SR (2-stage)")
 ax2.axis("off")
-put_res(ax2, sr_res_text)
+put_res(ax2, f"{sw} x {sh}")
 
-# HR Image
 ax3 = plt.subplot(2,3,3)
 ax3.imshow(hr_image)
-ax3.set_title("Ground Truth HR")
+ax3.set_title("HR")
 ax3.axis("off")
-put_res(ax3, hr_res_text)
+put_res(ax3, f"{w} x {h}")
 
-# Patches (no text)
 plt.subplot(2,3,4)
 plt.imshow(lr_patch_up)
-plt.title("LR Patch (Bicubic)")
+plt.title("LR Patch")
 plt.axis("off")
 
 plt.subplot(2,3,5)

@@ -14,10 +14,10 @@ import cv2
 # ===============================
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-SIGMA = 25                 # 25 or 50
+SIGMA = 50                 # 25 or 50
 NOISE_TYPE = "gaussian"    # gaussian / real
 
-MODEL_PATH = "weights/dncnn/Dncnn_8_Gaussian_Best_25.pth"
+MODEL_PATH = "weights/dncnn/Dncnn_8_Gaussian_Best_50.pth"
 
 # ===============================
 # YOUR MODEL (MATCH TRAINING)

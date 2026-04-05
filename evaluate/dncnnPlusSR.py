@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 # ================= CONFIG =================
 TRAIN_DIR = r"data"
 DNCNN_DIR = r"weights/dncnn"
-SWIN_PATH = r"weights/SR/best_mini_swinir.pth"
+SWIN_SR_PATH = r"weights/SR/best_swinir_sr.pth"
+SWIN_DN_PATH = r"weights/SR/best_swinir_dn.pth"
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -273,7 +274,7 @@ def main():
     lr = best_dncnn
     print("Swin Input Shape:", lr.shape)
 
-    swin = load_swin_model(SWIN_PATH)
+    swin = load_swin_model(SWIN_SR_PATH)
     inp = torch.from_numpy(lr).permute(2,0,1).unsqueeze(0).to(DEVICE)
 
     with torch.no_grad():
