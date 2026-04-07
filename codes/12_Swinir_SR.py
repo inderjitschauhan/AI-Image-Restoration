@@ -25,11 +25,9 @@ import matplotlib.pyplot as plt
 SCALE = 4
 PATCH_SIZE = 96
 BATCH_SIZE = 4
-EPOCHS = 50
-LR_RATE = 1e-4
+EPOCHS = 300
+LR_RATE = 1e-3
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-import os
 
 import os
 
@@ -357,7 +355,7 @@ for epoch in range(EPOCHS):
 
     if val_psnr > best_psnr:
         best_psnr = val_psnr
-        torch.save(model.state_dict(), "best_swinir_sr.pth")
+        torch.save(model.state_dict(), "weights/SR/best_swinir_sr300.pth")
         print("Best model saved!")
 
     axs[0,0].clear(); axs[0,0].plot(train_loss_list); axs[0,0].set_title("Train Loss")

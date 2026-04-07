@@ -14,7 +14,9 @@ import os
 # ===============================
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-SIGMA = 25   # 🔥 CHANGE to 50 when needed
+SIGMA = 50   #  CHANGE to 50 when needed
+
+print(SIGMA)
 
 MODEL_PATHS = {
     25: "weights/dncnn/dncnn_real_best_lrsr_25.pth",

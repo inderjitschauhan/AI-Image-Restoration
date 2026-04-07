@@ -173,21 +173,24 @@ transform = transforms.ToTensor()
 lr_tensor = transform(lr_image).unsqueeze(0).to(DEVICE)
 
 # ===============================
-# INFERENCE (2x SR passes)
+# INFERENCE
 # ===============================
 start = time.time()
-
 with torch.no_grad():
-    # First SR
     sr_tensor = model(lr_tensor)
-    
-    # Second SR (feed output again)
-    sr_tensor = model(sr_tensor)
-
 end = time.time()
 
 sr_tensor = torch.clamp(sr_tensor, 0, 1)
 
+# Convert tensor → numpy
+sr_np = sr_tensor.squeeze(0).cpu().numpy().transpose(1, 2, 0)
+sr_np = (sr_np * 255).clip(0, 255).astype(np.uint8)
+
+# Bilateral filter (remove ringing)
+sr_np = cv2.bilateralFilter(sr_np, d=5, sigmaColor=50, sigmaSpace=50)
+
+# Back to PIL
+sr_image = Image.fromarray(sr_np)
 
 # ===============================
 # METRICS

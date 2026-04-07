@@ -1,27 +1,79 @@
+import os
+import cv2
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torchvision import transforms
-from PIL import Image
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader, random_split
 import matplotlib.pyplot as plt
-from tkinter import Tk
-from tkinter.filedialog import askopenfilename
-import numpy as np
-import cv2
 
-# ===============================
-# CONFIG
-# ===============================
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.backends.cudnn.benchmark = True
 
-SIGMA = 25                 # 25 or 50
-NOISE_TYPE = "gaussian"    # gaussian / real
+# ================= CONFIG =================
+TRAIN_DIR = os.path.abspath(r".\data\train")
+SAVE_DIR = os.path.abspath(r".\weights\dncnn")
+os.makedirs(SAVE_DIR, exist_ok=True)
+#print("Train Dir:", TRAIN_DIR)
+#print("Save Dir:", SAVE_DIR)
 
-MODEL_PATH = "weights/dncnn/Dncnn_8_Gaussian_Best_25.pth"
+os.makedirs(SAVE_DIR, exist_ok=True)
 
-# ===============================
-# YOUR MODEL (MATCH TRAINING)
-# ===============================
+PATCH_SIZE = 64
+BATCH_SIZE = 16   # large batch; adjust to GPU memory
+EPOCHS = 50
+LR = 1e-3
+SIGMA = 25
+PATCHES_PER_IMAGE = 2
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+best_psnr = 0
+
+# ================= PSNR =================
+def psnr(x, y):
+    mse = torch.mean((x - y) ** 2)
+    mse = torch.clamp(mse, min=1e-10)
+    return 10 * torch.log10(1.0 / mse)
+
+# ================= DATASET =================
+class DenoiseDataset(Dataset):
+    def __init__(self, root, patch_size=64, patches_per_image=50):
+        self.files = [
+            os.path.join(root, f)
+            for f in os.listdir(root)
+            if f.lower().endswith((".png", ".jpg", ".jpeg"))
+        ]
+        self.patch = patch_size
+        self.patches_per_image = patches_per_image
+
+    def __len__(self):
+        return len(self.files) * self.patches_per_image
+
+    def __getitem__(self, idx):
+        file_index = idx % len(self.files)
+        img = cv2.imread(self.files[file_index])
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = img.astype(np.float32) / 255.0
+
+        H, W, _ = img.shape
+        ps = self.patch
+
+        if H < ps or W < ps:
+            img = cv2.resize(img, (ps, ps))
+            H, W, _ = img.shape
+
+        y = np.random.randint(0, H - ps + 1)
+        x = np.random.randint(0, W - ps + 1)
+
+        clean = img[y:y+ps, x:x+ps]
+        noise = np.random.normal(0, SIGMA/255.0, clean.shape).astype(np.float32)
+        noisy = np.clip(clean + noise, 0, 1)
+
+        clean = torch.from_numpy(clean).permute(2,0,1)
+        noisy = torch.from_numpy(noisy).permute(2,0,1)
+
+        return noisy, clean
+
+# ================= MODEL =================
 class DnCNN(nn.Module):
     def __init__(self, depth=8, channels=32):
         super().__init__()
@@ -40,132 +92,152 @@ class DnCNN(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-# ===============================
-# METRICS
-# ===============================
-def calculate_psnr(x, y):
-    mse = F.mse_loss(x, y)
-    return 20 * torch.log10(1.0 / torch.sqrt(mse))
+# ================= MODEL DEBUG FUNCTION =================
+def print_model_details(model, device, input_size=(1, 3, 64, 64)):
+    print("\n================ MODEL SUMMARY ================\n")
+    
+    # Full architecture
+    print("Full Architecture:\n")
+    print(model)
+    
+    print("\n---------------- Layer-wise Output Shapes ----------------\n")
+    
+    x = torch.randn(input_size).to(device)
+    
+    for i, layer in enumerate(model.net):
+        x = layer(x)
+        print(f"Layer {i:02d} | {layer.__class__.__name__:<15} | Output Shape: {tuple(x.shape)}")
+    
+    print("\n---------------- Parameter Details ----------------\n")
+    
+    total_params = 0
+    trainable_params = 0
+    
+    for name, param in model.named_parameters():
+        num_params = param.numel()
+        total_params += num_params
+        if param.requires_grad:
+            trainable_params += num_params
+        print(f"{name:<30} Shape: {tuple(param.shape)} | Params: {num_params}")
+    
+    print("\n--------------------------------------------------")
+    print(f"Total Parameters     : {total_params:,}")
+    print(f"Trainable Parameters : {trainable_params:,}")
+    print("==================================================\n")
 
-def calculate_ssim(img1, img2):
-    C1 = 0.01 ** 2
-    C2 = 0.03 ** 2
+# ================= MAIN TRAINING =================
+if __name__ == "__main__":
+    
+    dataset = DenoiseDataset(TRAIN_DIR, PATCH_SIZE, PATCHES_PER_IMAGE)
 
-    mu1 = F.avg_pool2d(img1, 3, 1, 1)
-    mu2 = F.avg_pool2d(img2, 3, 1, 1)
+    train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_set, val_set = random_split(dataset, [train_size, val_size])
 
-    sigma1 = F.avg_pool2d(img1 * img1, 3, 1, 1) - mu1 ** 2
-    sigma2 = F.avg_pool2d(img2 * img2, 3, 1, 1) - mu2 ** 2
-    sigma12 = F.avg_pool2d(img1 * img2, 3, 1, 1) - mu1 * mu2
-
-    return (((2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)) /
-           ((mu1**2 + mu2**2 + C1) * (sigma1 + sigma2 + C2))).mean()
-
-# ===============================
-# NOISE
-# ===============================
-def add_gaussian_noise(img, sigma):
-    noise = np.random.normal(0, sigma, img.shape)
-    return np.clip(img + noise, 0, 255)
-
-def add_real_noise(img, sigma):
-    noise = np.random.normal(0, sigma, img.shape)
-    poisson = np.random.poisson(img) - img
-    return np.clip(img + noise + 0.3 * poisson, 0, 255)
-
-# ===============================
-# LOAD IMAGE
-# ===============================
-Tk().withdraw()
-path = askopenfilename(title="Select Image")
-
-img = Image.open(path).convert("RGB")
-img_np = np.array(img).astype(np.float32)
-
-# ===============================
-# ADD NOISE
-# ===============================
-if NOISE_TYPE == "gaussian":
-    noisy_np = add_gaussian_noise(img_np, SIGMA)
-else:
-    noisy_np = add_real_noise(img_np, SIGMA)
-
-noisy_np = noisy_np.astype(np.uint8)
-noisy_img = Image.fromarray(noisy_np)
-
-# ===============================
-# LOAD MODEL
-# ===============================
-model = DnCNN().to(DEVICE)
-model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
-model.eval()
-
-# ===============================
-# INFERENCE
-# ===============================
-transform = transforms.ToTensor()
-
-noisy_tensor = transform(noisy_img).unsqueeze(0).to(DEVICE)
-clean_tensor = transform(img).unsqueeze(0).to(DEVICE)
-
-with torch.no_grad():
-    pred_noise = model(noisy_tensor)
-    denoised = torch.clamp(noisy_tensor - pred_noise, 0, 1)
-
-# ===============================
-# METRICS
-# ===============================
-psnr_noisy = calculate_psnr(noisy_tensor, clean_tensor)
-psnr_denoised = calculate_psnr(denoised, clean_tensor)
-
-ssim_noisy = calculate_ssim(noisy_tensor, clean_tensor)
-ssim_denoised = calculate_ssim(denoised, clean_tensor)
-
-# ===============================
-# CONVERT
-# ===============================
-den_np = denoised.squeeze().cpu().numpy().transpose(1,2,0)
-den_np = (den_np * 255).astype(np.uint8)
-den_img = Image.fromarray(den_np)
-
-# ===============================
-# DISPLAY
-# ===============================
-def put_text(ax, text, y=0):
-    ax.text(
-        0.02, 0.95 - y,
-        text,
-        transform=ax.transAxes,
-        fontsize=10,
-        color='yellow',
-        verticalalignment='top',
-        bbox=dict(facecolor='black', alpha=0.6)
+    train_loader = DataLoader(
+        train_set,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=4,  # safe for Windows
+        pin_memory=True
     )
 
-plt.figure(figsize=(15,5))
+    val_loader = DataLoader(
+        val_set,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
+    )
 
-# Original
-ax1 = plt.subplot(1,3,1)
-ax1.imshow(img)
-ax1.set_title("Original")
-ax1.axis("off")
+    model = DnCNN().to(DEVICE)
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=LR)
 
-# Noisy
-ax2 = plt.subplot(1,3,2)
-ax2.imshow(noisy_img)
-ax2.set_title("Noisy")
-ax2.axis("off")
-put_text(ax2, f"{NOISE_TYPE} σ={SIGMA}")
-put_text(ax2, f"PSNR: {psnr_noisy:.2f}", 0.08)
-put_text(ax2, f"SSIM: {ssim_noisy:.4f}", 0.16)
+    plt.ion()
+    fig1 = plt.figure(figsize=(7,5))
+    fig2 = plt.figure(figsize=(7,5))
 
-# Denoised
-ax3 = plt.subplot(1,3,3)
-ax3.imshow(den_img)
-ax3.set_title("DnCNN Output")
-ax3.axis("off")
-put_text(ax3, f"PSNR: {psnr_denoised:.2f}")
-put_text(ax3, f"SSIM: {ssim_denoised:.4f}", 0.08)
+    train_loss_hist = []
+    val_loss_hist = []
+    val_psnr_hist = []
 
-plt.tight_layout()
-plt.show()
+    print("Starting Training")
+    print("Device:", DEVICE, "| Images:", len(dataset))
+
+    for epoch in range(1, EPOCHS+1):
+
+        model.train()
+        train_loss = 0
+
+        for noisy, clean in train_loader:
+            noisy, clean = noisy.to(DEVICE), clean.to(DEVICE)
+
+            optimizer.zero_grad()
+            pred_noise = model(noisy)
+            loss = criterion(pred_noise, noisy - clean)
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item()
+
+        train_loss /= len(train_loader)
+
+        model.eval()
+        val_loss = 0
+        val_psnr = 0
+
+        with torch.no_grad():
+            for noisy, clean in val_loader:
+                noisy, clean = noisy.to(DEVICE), clean.to(DEVICE)
+
+                pred_noise = model(noisy)
+                loss = criterion(pred_noise, noisy - clean)
+                val_loss += loss.item()
+
+                denoised = torch.clamp(noisy - pred_noise, 0, 1)
+                val_psnr += psnr(denoised, clean).item()
+
+        val_loss /= len(val_loader)
+        val_psnr /= len(val_loader)
+
+        print(f"Epoch {epoch:02d} | Train Loss: {train_loss:.3e} | "
+              f"Val Loss: {val_loss:.3e} | Val PSNR: {val_psnr:.2f} dB")
+
+        train_loss_hist.append(train_loss)
+        val_loss_hist.append(val_loss)
+        val_psnr_hist.append(val_psnr)
+
+        torch.save(model.state_dict(),
+                   os.path.join(SAVE_DIR, "Dncnn_8_Gaussian_Last_25.pth"))
+
+        if val_psnr > best_psnr:
+            best_psnr = val_psnr
+            torch.save(model.state_dict(),
+                       os.path.join(SAVE_DIR, "Dncnn_8_Gaussian_Best_25.pth"))
+            print("Best model saved.")
+
+        plt.figure(fig1.number)
+        plt.clf()
+        plt.plot(train_loss_hist, label="Train Loss")
+        plt.plot(val_loss_hist, label="Val Loss")
+        plt.xlabel("Epoch")
+        plt.title("Loss Curve")
+        plt.legend()
+        plt.grid(True)
+
+        plt.figure(fig2.number)
+        plt.clf()
+        plt.plot(val_psnr_hist, label="Val PSNR")
+        plt.xlabel("Epoch")
+        plt.title("PSNR Curve")
+        plt.legend()
+        plt.grid(True)
+
+        plt.pause(0.001)
+
+    plt.ioff()
+    plt.show()
+
+    # Optional: print model details at the end
+    print_model_details(model, DEVICE)
