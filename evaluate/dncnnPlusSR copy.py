@@ -83,7 +83,7 @@ class DnCNN(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-# ================= SWIN =================
+# ================= SWIN HELPERS =================
 def window_partition(x, window_size):
     B, C, H, W = x.shape
     x = x.view(B, C, H // window_size, window_size,
@@ -92,14 +92,13 @@ def window_partition(x, window_size):
     return windows.view(-1, window_size*window_size, C)
 
 def window_reverse(windows, window_size, H, W):
-    denom = max((H * W) / (window_size * window_size), 1)
-    B = int(windows.shape[0] / denom)
-
-    x = windows.view(B, H//window_size, W//window_size,
+    B = int(windows.shape[0] / (H * W / window_size / window_size))
+    x = windows.view(B, H // window_size, W // window_size,
                      window_size, window_size, -1)
     x = x.permute(0,5,1,3,2,4).contiguous()
     return x.view(B, -1, H, W)
 
+# ================= SWIN BLOCK =================
 class SwinBlock(nn.Module):
     def __init__(self, dim, window_size=8, shift=False):
         super().__init__()
@@ -119,14 +118,18 @@ class SwinBlock(nn.Module):
         B, C, H, W = x.shape
         ws = self.window_size
 
+        # ---- PAD ----
         pad_h = (ws - H % ws) % ws
         pad_w = (ws - W % ws) % ws
-        x = F.pad(x, (0, pad_w, 0, pad_h))
-        _, _, Hp, Wp = x.shape
 
+        x = F.pad(x, (0, pad_w, 0, pad_h))
+        Hp, Wp = x.shape[2], x.shape[3]
+
+        # ---- SHIFT ----
         if self.shift:
             x = torch.roll(x, shifts=(-ws//2, -ws//2), dims=(2,3))
 
+        # ---- WINDOW ----
         windows = window_partition(x, ws)
         windows = self.norm1(windows)
 
@@ -134,13 +137,16 @@ class SwinBlock(nn.Module):
         windows = windows + attn_out
         windows = windows + self.mlp(self.norm2(windows))
 
+        # ---- REVERSE ----
         x = window_reverse(windows, ws, Hp, Wp)
 
         if self.shift:
             x = torch.roll(x, shifts=(ws//2, ws//2), dims=(2,3))
 
+        # ---- CROP BACK ----
         return x[:, :, :H, :W]
 
+# ================= SWIN MODEL =================
 class MiniSwinIR(nn.Module):
     def __init__(self, dim=96):
         super().__init__()
@@ -171,7 +177,7 @@ class MiniSwinIR(nn.Module):
 
 def load_swin_model(path):
     model = MiniSwinIR().to(DEVICE)
-    state = torch.load(path, map_location=DEVICE)
+    state = torch.load(path, map_location=DEVICE, weights_only=True)
     model.load_state_dict(state, strict=False)
     return model.eval()
 
@@ -206,7 +212,7 @@ def add_gaussian_noise(img, sigma):
 
 # ================= LOAD DNCNN =================
 def load_dncnn(path):
-    state = torch.load(path, map_location=DEVICE)
+    state = torch.load(path, map_location=DEVICE, weights_only=True)
     state = state.get("model_state_dict", state)
 
     convs = [v for v in state.values() if len(v.shape)==4]
@@ -225,26 +231,43 @@ def plot_results(df):
 
     for sigma in sigmas:
         df_sigma = df[df["Sigma"] == sigma].copy()
-
-        # ✅ keep custom order
         df_sigma = df_sigma.sort_values(by="Priority")
 
         models = df_sigma["Model"]
 
+        # PSNR
         plt.figure()
         plt.bar(models, df_sigma["PSNR"])
         plt.xticks(rotation=45, ha='right')
-        plt.ylabel("PSNR (dB)")
-        plt.title(f"PSNR Comparison (σ = {sigma})")
+        plt.title(f"PSNR (σ={sigma})")
+        plt.tight_layout()
+        plt.show()
+
+        # SSIM
+        plt.figure()
+        plt.bar(models, df_sigma["SSIM"])
+        plt.xticks(rotation=45, ha='right')
+        plt.title(f"SSIM (σ={sigma})")
+        plt.tight_layout()
+        plt.show()
+
+        # TIME
+        plt.figure()
+        plt.bar(models, df_sigma["Time"])
+        plt.xticks(rotation=45, ha='right')
+        plt.title(f"Inference Time (σ={sigma})")
         plt.tight_layout()
         plt.show()
 
 # ================= MAIN =================
 def main():
-
     clean = get_random_image(TRAIN_DIR)
-    results = []
 
+    # optional: make divisible by 8 (extra safety)
+    h, w = clean.shape[:2]
+    clean = clean[:(h//8)*8, :(w//8)*8]
+
+    results = []
     sigmas = [25, 50]
 
     swin = load_swin_model(SWIN_SR_PATH)
@@ -261,24 +284,28 @@ def main():
         for f in os.listdir(DNCNN_DIR):
             if not f.endswith(".pth"):
                 continue
-
             if f"_{sigma}" not in f.lower():
                 continue
 
             model = load_dncnn(os.path.join(DNCNN_DIR, f))
 
             with torch.no_grad():
+                start = time.time()
                 pred = model(noisy_tensor)
                 out = noisy_tensor - pred
+                end = time.time()
 
             img = out.squeeze().permute(1,2,0).cpu().numpy()
             img = np.clip(img,0,1)
 
             psnr = calculate_psnr(clean, img)
+            ssim_val = calculate_ssim(clean, img)
 
             results.append({
                 "Model": clean_name(f),
                 "PSNR": psnr,
+                "SSIM": ssim_val,
+                "Time": end-start,
                 "Stage": f"DnCNN σ{sigma}",
                 "Sigma": sigma
             })
@@ -291,16 +318,20 @@ def main():
         inp = torch.from_numpy(best_dncnn).permute(2,0,1).unsqueeze(0).to(DEVICE)
 
         with torch.no_grad():
+            start = time.time()
             final = swin(inp)
+            end = time.time()
 
         final = final.squeeze().permute(1,2,0).cpu().numpy()
         final = np.clip(final,0,1)
 
-        clean_resized = cv2.resize(clean, (final.shape[1], final.shape[0]), interpolation=cv2.INTER_CUBIC)
+        clean_resized = cv2.resize(clean, (final.shape[1], final.shape[0]))
 
         results.append({
             "Model": f"SwinIR σ{sigma}",
             "PSNR": calculate_psnr(clean_resized, final),
+            "SSIM": calculate_ssim(clean_resized, final),
+            "Time": end-start,
             "Stage": "Final",
             "Sigma": sigma
         })
@@ -309,22 +340,22 @@ def main():
         results.append({
             "Model": f"Noisy σ{sigma}",
             "PSNR": calculate_psnr(clean, noisy),
+            "SSIM": calculate_ssim(clean, noisy),
+            "Time": 0,
             "Stage": "Baseline",
             "Sigma": sigma
         })
 
-    # ===== FINAL SORTING =====
+    # ===== FINAL SORT =====
     df = pd.DataFrame(results)
-
     df["Priority"] = df.apply(model_priority, axis=1)
-
-    df = df.sort_values(by=["Sigma", "Priority"], ascending=[True, True])
+    df = df.sort_values(by=["Sigma", "Priority"])
 
     print("\n=========== FINAL RESULTS ===========\n")
     print(df.drop(columns=["Priority"]).to_string(index=False))
 
     plot_results(df)
 
-
+# ================= RUN =================
 if __name__ == "__main__":
     main()
