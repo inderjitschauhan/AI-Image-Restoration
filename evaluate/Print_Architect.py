@@ -32,81 +32,59 @@ class DnCNN(nn.Module):
 
 # ================= SWIN BLOCK =================
 class SwinBlock(nn.Module):
-    def __init__(self, dim, num_heads, mlp_ratio=2):
+    def __init__(self, dim, heads=2, window_size=8, shift=False, mlp_ratio=4):
         super().__init__()
 
+        self.window_size = window_size
+        self.shift = shift
+
         self.norm1 = nn.LayerNorm(dim)
-        self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+        self.attn = nn.MultiheadAttention(dim, heads, batch_first=True)
 
         self.norm2 = nn.LayerNorm(dim)
-        hidden_dim = int(dim * mlp_ratio)
 
+        hidden = int(dim * mlp_ratio)
         self.mlp = nn.Sequential(
-            nn.Linear(dim, hidden_dim),
+            nn.Linear(dim, hidden),
             nn.GELU(),
-            nn.Linear(hidden_dim, dim)
+            nn.Linear(hidden, dim)
         )
 
     def forward(self, x):
-        B, C, H, W = x.shape
-
-        x_flat = x.flatten(2).transpose(1, 2)  # (B, HW, C)
-
-        # Attention
-        shortcut = x_flat
-        x_flat = self.norm1(x_flat)
-        attn_out, _ = self.attn(x_flat, x_flat, x_flat)
-        x_flat = shortcut + attn_out
-
-        # MLP
-        shortcut = x_flat
-        x_flat = self.norm2(x_flat)
-        x_flat = shortcut + self.mlp(x_flat)
-
-        x = x_flat.transpose(1, 2).view(B, C, H, W)
-        return x
+        return x  # only for architecture printing
 
 # ================= SWINIR DN =================
 class SwinIR_DN(nn.Module):
-    def __init__(self, dim=48, num_heads=2, mlp_ratio=2):
+    def __init__(self, dim=48):
         super().__init__()
 
         self.conv_first = nn.Conv2d(3, dim, 3, 1, 1)
 
         self.blocks = nn.Sequential(
-            SwinBlock(dim, num_heads, mlp_ratio),
-            SwinBlock(dim, num_heads, mlp_ratio),
-            SwinBlock(dim, num_heads, mlp_ratio),
-            SwinBlock(dim, num_heads, mlp_ratio),
+            SwinBlock(dim, 2, 8, False, mlp_ratio=2),
+            SwinBlock(dim, 2, 8, True,  mlp_ratio=2),
+            SwinBlock(dim, 2, 8, False, mlp_ratio=2),
+            SwinBlock(dim, 2, 8, True,  mlp_ratio=2),
         )
 
         self.conv_mid = nn.Conv2d(dim, dim, 3, 1, 1)
         self.conv_last = nn.Conv2d(dim, 3, 3, 1, 1)
 
     def forward(self, x):
-        x = self.conv_first(x)
-        res = x
-
-        x = self.blocks(x)
-        x = self.conv_mid(x)
-
-        x = x + res
-        x = self.conv_last(x)
-
         return x
 
 # ================= SWINIR SR =================
-class SwinIR_SR(nn.Module):
-    def __init__(self, dim=96, num_heads=4, mlp_ratio=4):
+class MiniSwinIR(nn.Module):
+    def __init__(self, dim=96):
         super().__init__()
 
         self.conv_first = nn.Conv2d(3, dim, 3, 1, 1)
 
         self.blocks = nn.Sequential(
-            SwinBlock(dim, num_heads, mlp_ratio),
-            SwinBlock(dim, num_heads, mlp_ratio),
-            SwinBlock(dim, num_heads, mlp_ratio),
-            SwinBlock(dim, num_heads, mlp_ratio),
+            SwinBlock(dim, 4, 8, False, mlp_ratio=4),
+            SwinBlock(dim, 4, 8, True,  mlp_ratio=4),
+            SwinBlock(dim, 4, 8, False, mlp_ratio=4),
+            SwinBlock(dim, 4, 8, True,  mlp_ratio=4),
         )
 
         self.conv_mid = nn.Conv2d(dim, dim, 3, 1, 1)
@@ -118,29 +96,7 @@ class SwinIR_SR(nn.Module):
         )
 
     def forward(self, x):
-        x = self.conv_first(x)
-        res = x
-
-        x = self.blocks(x)
-        x = self.conv_mid(x)
-
-        x = x + res
-        x = self.upsample(x)
-
         return x
-
-# ================= AUTO DETECT =================
-def detect_mlp_ratio(state_dict, dim):
-    for k, v in state_dict.items():
-        if "mlp.0.weight" in k:
-            return v.shape[0] / dim
-    return 2
-
-def detect_heads(state_dict, dim):
-    for k, v in state_dict.items():
-        if "attn.in_proj_weight" in k:
-            return v.shape[0] // (3 * dim)
-    return 2
 
 # ================= UTIL =================
 def count_parameters(model):
@@ -151,15 +107,21 @@ def print_model_summary(model, name):
     print(f"MODEL: {name}")
     print(f"{'='*60}")
 
-    print("\nArchitecture:\n")
+    print("\n🔹 Architecture:\n")
     print(model)
 
     total_params = count_parameters(model)
-    print(f"\nTotal Params: {total_params:,} ({total_params/1e6:.2f}M)\n")
+    print(f"\n🔹 Total Parameters: {total_params:,} ({total_params/1e6:.2f}M)")
+
+    print("\n🔹 Layer-wise Details:\n")
+    for lname, module in model.named_modules():
+        if len(list(module.children())) == 0:
+            params = sum(p.numel() for p in module.parameters())
+            print(f"{lname:30s} | {module.__class__.__name__:20s} | {params:,}")
 
 # ================= LOAD DNCNN =================
 def load_dncnn(path):
-    state = torch.load(path, map_location=DEVICE)
+    state = torch.load(path, map_location=DEVICE,weights_only=True)
     state = state.get("model_state_dict", state)
 
     convs = [v for v in state.values() if len(v.shape) == 4]
@@ -172,47 +134,20 @@ def load_dncnn(path):
 
     return model, depth
 
-# ================= LOAD SWIN DN =================
-def load_swin_dn(path):
-    state = torch.load(path, map_location=DEVICE)
-
-    dim = 48
-    mlp_ratio = detect_mlp_ratio(state, dim)
-    num_heads = int(detect_heads(state, dim))
-
-    print(f"\n[Auto-Detected DN] dim={dim}, heads={num_heads}, mlp_ratio={mlp_ratio}")
-
-    model = SwinIR_DN(dim, num_heads, mlp_ratio).to(DEVICE)
-    model.load_state_dict(state, strict=False)
-
-    return model
-
-# ================= LOAD SWIN SR =================
-def load_swin_sr(path):
-    state = torch.load(path, map_location=DEVICE)
-
-    dim = 96
-    mlp_ratio = detect_mlp_ratio(state, dim)
-    num_heads = int(detect_heads(state, dim))
-
-    print(f"\n[Auto-Detected SR] dim={dim}, heads={num_heads}, mlp_ratio={mlp_ratio}")
-
-    model = SwinIR_SR(dim, num_heads, mlp_ratio).to(DEVICE)
-    model.load_state_dict(state, strict=False)
-
-    return model
-
 # ================= MAIN =================
 def main():
     printed = set()
 
     # ===== DNCNN =====
-    print("\n========= DNCNN =========")
+    print("\n========= DNCNN MODELS =========")
+
     for f in os.listdir(DNCNN_DIR):
         if not f.endswith(".pth"):
             continue
 
-        model, depth = load_dncnn(os.path.join(DNCNN_DIR, f))
+        path = os.path.join(DNCNN_DIR, f)
+        model, depth = load_dncnn(path)
+
         key = f"DnCNN-{depth}"
 
         if key in printed:
@@ -223,13 +158,27 @@ def main():
 
     # ===== SWINIR DN =====
     print("\n========= SWINIR DN =========")
-    dn_model = load_swin_dn(SWIN_DN_PATH)
-    print_model_summary(dn_model, "SwinIR-DN (Auto)")
+
+    swin_dn = SwinIR_DN().to(DEVICE)
+
+    state = torch.load(SWIN_DN_PATH, map_location=DEVICE,weights_only=True)
+    state = state.get("model_state_dict", state)
+
+    swin_dn.load_state_dict(state, strict=False)
+
+    print_model_summary(swin_dn, "SwinIR-DN")
 
     # ===== SWINIR SR =====
     print("\n========= SWINIR SR =========")
-    sr_model = load_swin_sr(SWIN_SR_PATH)
-    print_model_summary(sr_model, "SwinIR-SR (Auto)")
+
+    swin_sr = MiniSwinIR().to(DEVICE)
+
+    state = torch.load(SWIN_SR_PATH, map_location=DEVICE,weights_only=True)
+    state = state.get("model_state_dict", state)
+
+    swin_sr.load_state_dict(state, strict=False)
+
+    print_model_summary(swin_sr, "SwinIR-SR")
 
 # ================= RUN =================
 if __name__ == "__main__":

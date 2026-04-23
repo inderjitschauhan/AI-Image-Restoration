@@ -352,7 +352,122 @@ def plot_results_stacked(df):
 
     plt.tight_layout()
     plt.show()
-           
+    
+def plot_separate_metrics(df):
+    sigmas = sorted(df["Sigma (σ)"].unique())
+
+    for sigma in sigmas:
+        df_sigma = df[df["Sigma (σ)"] == sigma]
+
+        models = df_sigma["Model"].values
+        x = np.arange(len(models))
+
+        psnr = df_sigma["PSNR (dB)"].astype(float).values
+        ssim_vals = df_sigma["SSIM"].astype(float).values
+        time_vals = df_sigma["Time (s)"].astype(float).values
+        params = df_sigma["Params (M)"].replace("NA", np.nan).astype(float).values
+
+        # -------- PSNR --------
+        plt.figure(figsize=(10, 5))
+        plt.bar(x, psnr)
+        plt.xticks(x, models, rotation=40, ha='right')
+        plt.title(f"PSNR Comparison (Sigma = {sigma})")
+        plt.ylabel("PSNR (dB)")
+        plt.tight_layout()
+        plt.show()
+
+        # -------- SSIM --------
+        plt.figure(figsize=(10, 5))
+        plt.bar(x, ssim_vals)
+        plt.xticks(x, models, rotation=40, ha='right')
+        plt.title(f"SSIM Comparison (Sigma = {sigma})")
+        plt.ylabel("SSIM")
+        plt.tight_layout()
+        plt.show()
+
+        # -------- INFERENCE TIME --------
+        plt.figure(figsize=(10, 5))
+        plt.bar(x, time_vals)
+        plt.xticks(x, models, rotation=40, ha='right')
+        plt.title(f"Inference Time (Sigma = {sigma})")
+        plt.ylabel("Time (seconds)")
+        plt.tight_layout()
+        plt.show()
+
+        # -------- PARAMETERS --------
+        plt.figure(figsize=(10, 5))
+        plt.bar(x, params)
+        plt.xticks(x, models, rotation=40, ha='right')
+        plt.title(f"Model Parameters (Sigma = {sigma})")
+        plt.ylabel("Parameters (Millions)")
+        plt.tight_layout()
+        plt.show()
+# ================= HELPER =================
+def base_model_name(name):
+    return name.replace("-25", "").replace("-50", "")
+
+# ================= FINAL COMBINED PLOT =================
+def plot_combined_metrics(df):
+
+    # 🔥 remove original + noisy (optional but cleaner)
+    df = df[~df["Model"].str.contains("Original")]
+
+    # 🔥 create base model column
+    df["BaseModel"] = df["Model"].apply(base_model_name)
+
+    metrics = [
+        ("PSNR (dB)", "PSNR (dB)"),
+        ("SSIM", "SSIM"),
+        ("Time (s)", "Time (seconds)"),
+        ("Params (M)", "Parameters (Millions)")
+    ]
+
+    sigmas = sorted(df["Sigma (σ)"].unique())
+
+    # 🔥 consistent model order
+    model_order = df["BaseModel"].unique()
+    x = np.arange(len(model_order))
+    width = 0.35
+
+    for metric_col, ylabel in metrics:
+        plt.figure(figsize=(14, 6))
+
+        for i, sigma in enumerate(sigmas):
+            df_sigma = df[df["Sigma (σ)"] == sigma]
+
+            values = []
+            for m in model_order:
+                row = df_sigma[df_sigma["BaseModel"] == m]
+
+                if len(row) == 0:
+                    values.append(np.nan)
+                else:
+                    val = row[metric_col].values[0]
+                    values.append(float(val) if val != "NA" else np.nan)
+
+            values = np.array(values)
+
+            bars = plt.bar(x + i * width, values, width, label=f"σ={sigma}")
+
+            # -------- DATA LABELS --------
+            for bar in bars:
+                height = bar.get_height()
+                if not np.isnan(height):
+                    plt.text(
+                        bar.get_x() + bar.get_width()/2,
+                        height,
+                        f"{height:.2f}",
+                        ha='center',
+                        va='bottom',
+                        fontsize=8
+                    )
+
+        plt.xticks(x + width/2, model_order, rotation=40, ha='right')
+        plt.title(f"{metric_col} Comparison (σ=25 vs 50)")
+        plt.ylabel(ylabel)
+        plt.legend()
+        plt.tight_layout()
+        plt.show()               
 # ================= MAIN =================
 def main():
     img = get_random_image(TRAIN_DIR)
@@ -475,7 +590,9 @@ def main():
         print(df_sigma.to_string(index=False))
         print("\n")
     
-    plot_results_stacked(df_display)
+    
+    plot_combined_metrics(df_display)
+
 
 if __name__ == "__main__":
     main()
